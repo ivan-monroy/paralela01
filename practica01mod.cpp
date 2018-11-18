@@ -206,7 +206,10 @@ int main(int argc, char *argv[]) {
 			printf("Error al crear el array de registro\n");
 			exit(-1);
 		}
-				
+		// Inicializa a -1
+		for(int i = 0; i < n_hilos; i++) {
+			reg[i] = -1;
+		}			
 		
 #ifdef FEATURE_LOGGER
 		// Variables necesarias
