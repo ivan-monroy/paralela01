@@ -69,21 +69,11 @@ void logger(std::condition_variable *cv_logger, std::mutex *mx_logger,
 	while(hilos_terminados < n_hilos) {
 		// Mientras no hayan acabado todos los hilos
 		std::unique_lock<std::mutex> lk_logger(mx_despierta_logger); // Coge el mutex
-		cv_despierta_logger.wait(lk_logger, [n_hilos]{return b_logger;});// Espera resultados (suelta el mutex)
-		b_logger = false;	// Vuelve a ser false
-#ifdef DEBUGGER 
-		printf("El logger se ha despertado\n");
-#endif
-		// Recibe los datos del thread (tiene el mutex)	
-		resultado_logger += resultado_hilos[hilos_terminados].resultado;
-
-		// Aumenta el contador de hilos terminados
-		hilos_terminados++;
-
-		lk_logger.unlock();	// Suelta el mutex despierta_logger	
+		cv_despierta_logger.wait(lk_logger, [n_hilos]{return b_logger;});// Espera
+		// Se despierta
+		hilos_terminados += 1;
+		lk_logger.unlock();	
 	}
-	
-	printf("El logger ha recibido %d hilos\n", hilos_terminados);
 	// Terminan todos los hilos
 	
 	// Imprime por orden de creacion
@@ -96,6 +86,11 @@ void logger(std::condition_variable *cv_logger, std::mutex *mx_logger,
 	printf("MUESTRA RESULTADOS DEL REGISTRO\n");
 	for(int i = 0; i < n_hilos; i++) {
 		printf("Hilo: %d\n", reg[i]);
+	}
+	
+	// Calcula el resultado el logger
+	for(int i = 0; i < n_hilos; i++) {
+		resultado_logger += resultado_hilos[i].resultado;
 	}
 	
 	printf("El logger obtiene el resultado: %f\n", resultado_logger);
@@ -256,23 +251,24 @@ int main(int argc, char *argv[]) {
 			// thread(array, inicio, fin, operacion, indice)
 			hilos[i] = std::thread(funcion_hilos, argumentos[i]);
 		}	// FIN FOR CREA HILOS
-
-#ifdef FEATURE_LOGGER
-		std::unique_lock<std::mutex> lk_logger_main(mx_logger);
-		printf("El main coge el mutex del logger\n");
-		cv_logger.wait(lk_logger_main, [b_main]{return b_main;});	// Espera al logger
-		// Aqui recibe el logger_info
-		hilo_logger.join();	// Join al logger
-		lk_logger_main.unlock();
-#endif
-
+		
+		// Espera a los workers
 		for(int i = 0; i<n_hilos; i++) {
 			hilos[i].join();
 		}
 #ifdef DEBUGGER
 		printf("Hilos workers finalizados\n");
 #endif
-		
+
+
+#ifdef FEATURE_LOGGER
+		std::unique_lock<std::mutex> lk_logger_main(mx_logger);
+		cv_logger.wait(lk_logger_main, [b_main]{return b_main;});	// Espera al logger
+		printf("Se despierta el main\n");
+		// Aqui recibe el logger_info
+		hilo_logger.join();	// Join al logger
+		lk_logger_main.unlock();
+#endif
 
 		if(imprimeElRegistro == 0) {    // El main imprime el registro
 		    printf("MUESTRA LOS RESULTADOS\n");
