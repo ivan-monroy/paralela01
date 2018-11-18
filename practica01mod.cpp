@@ -41,7 +41,7 @@ double funcion_xor(double *array, int inicio, int fin);
 // Mutex y CV que despierta al logger
 std::mutex mx_despierta_logger;
 std::condition_variable cv_despierta_logger;
-int hilos_resueltos = 0;
+bool b_logger = false;
 
 // Registro de finalizacion de hilos
 int *reg;
@@ -69,7 +69,8 @@ void logger(std::condition_variable *cv_logger, std::mutex *mx_logger,
 	while(hilos_terminados < n_hilos) {
 		// Mientras no hayan acabado todos los hilos
 		std::unique_lock<std::mutex> lk_logger(mx_despierta_logger); // Coge el mutex
-		cv_despierta_logger.wait(lk_logger, [n_hilos]{return hilos_resueltos != n_hilos;});// Espera resultados (suelta el mutex)
+		cv_despierta_logger.wait(lk_logger, [n_hilos]{return b_logger;});// Espera resultados (suelta el mutex)
+		b_logger = false;	// Vuelve a ser false
 #ifdef DEBUGGER 
 		printf("El logger se ha despertado\n");
 #endif
@@ -94,7 +95,7 @@ void logger(std::condition_variable *cv_logger, std::mutex *mx_logger,
 	// Imprime el registro
 	printf("MUESTRA RESULTADOS DEL REGISTRO\n");
 	for(int i = 0; i < n_hilos; i++) {
-		printf("Hilo: %d\nResultado: %f\n", reg[i], resultado_hilos[reg[i]].resultado);
+		printf("Hilo: %d\n", reg[i]);
 	}
 	
 	printf("El logger obtiene el resultado: %f\n", resultado_logger);
@@ -325,18 +326,16 @@ void funcion_hilos(struct Argumentos_hilo argumentos) {
     	/*DESPIERTA AL lOGGER*/
 	{
 		std::lock_guard<std::mutex> lk_despierta_logger(mx_despierta_logger); // Coge el mutex
-		printf("%d Llega a coger el mutex\n", argumentos.indice);
-		hilos_resueltos += 1;
-		printf("Hilos resueltos: %d\n", hilos_resueltos);
+		b_logger = true;
 	}
 	cv_despierta_logger.notify_one(); // Despierta al logger
-	printf("%d Llega a notificar al logger\n", argumentos.indice);
 #endif
     // Registra cuando acaba
     std::lock_guard<std::mutex> lk_reg(mx_reg);
     for(int i = 0; i < argumentos.n_hilos; i++) {
     	if(reg[i] == -1) {
     		reg[i] = argumentos.indice;
+		break;
     	}
     }
 }
