@@ -12,14 +12,13 @@
 #define DEBUGGER 0
 
 
-struct Registro_hilo{
+struct Resultado_hilo{
 	std::thread::id id_hilo;	// ID del thread
 	double resultado;		// Resultado del thread
-	int finalizado;			// Numero de finalizacion
 };
 
 
-struct Registro_hilo *registro_hilos;
+struct Resultado_hilo *resultado_hilos;
 
 
 struct Argumentos_hilo {
@@ -40,9 +39,9 @@ double funcion_xor(double *array, int inicio, int fin);
 
 #ifdef FEATURE_LOGGER
 // Mutex y CV que despierta al logger
-std::mutex mutex_despierta_logger;
+std::mutex mx_despierta_logger;
 std::condition_variable cv_despierta_logger;
-bool despierta_logger = false;
+int hilos_resueltos = 0;
 
 // Registro de finalizacion de hilos
 int *reg;
@@ -58,8 +57,8 @@ std::mutex mx_reg;
  * @param n_hilos: numero de hilos 
  *
  */
-void logger(std::condition_variable *cv_logger, std::mutex *mutex_logger,
-	    double *logger_info, int n_hilos)
+void logger(std::condition_variable *cv_logger, std::mutex *mx_logger,
+	    double *logger_info, bool *b_main, int n_hilos)
 {
 	#ifdef DEBUGGER
 	printf("Se ha creado el logger\n");
@@ -69,11 +68,13 @@ void logger(std::condition_variable *cv_logger, std::mutex *mutex_logger,
 	
 	while(hilos_terminados < n_hilos) {
 		// Mientras no hayan acabado todos los hilos
-		std::unique_lock<std::mutex> lk_logger(mutex_despierta_logger); // Coge el mutex
-		cv_despierta_logger.wait(lk_logger, []{return despierta_logger;});// Espera resultados (suelta el mutex)
+		std::unique_lock<std::mutex> lk_logger(mx_despierta_logger); // Coge el mutex
+		cv_despierta_logger.wait(lk_logger, [n_hilos]{return hilos_resueltos != n_hilos;});// Espera resultados (suelta el mutex)
+#ifdef DEBUGGER 
+		printf("El logger se ha despertado\n");
+#endif
 		// Recibe los datos del thread (tiene el mutex)	
-		resultado_logger += registro_hilos[hilos_terminados].resultado;
-		registro_hilos[hilos_terminados].finalizado = hilos_terminados;
+		resultado_logger += resultado_hilos[hilos_terminados].resultado;
 
 		// Aumenta el contador de hilos terminados
 		hilos_terminados++;
@@ -87,23 +88,24 @@ void logger(std::condition_variable *cv_logger, std::mutex *mutex_logger,
 	// Imprime por orden de creacion
 	printf("MUESTRA RESULTADOS POR ORDEN DE CREACION\n");
 	for(int i = 0; i < n_hilos; i++) {
-		printf("Hilo: %d\nResultado: %f\n", i, registro_hilos[i].resultado);
+		printf("Hilo: %d\nResultado: %f\n", i, resultado_hilos[i].resultado);
 	}
 
 	// Imprime el registro
 	printf("MUESTRA RESULTADOS DEL REGISTRO\n");
 	for(int i = 0; i < n_hilos; i++) {
-		printf("Hilo: %d\nResultado: %f\n", reg[i], registro_hilos[reg[i]].resultado);
+		printf("Hilo: %d\nResultado: %f\n", reg[i], resultado_hilos[reg[i]].resultado);
 	}
 	
 	printf("El logger obtiene el resultado: %f\n", resultado_logger);
 	
 	// Pasa el resultado al main
 	{
-		std::lock_guard<std::mutex> lk_main((*mutex_logger));
+		std::lock_guard<std::mutex> lk_main((*mx_logger));
 		(*logger_info) = resultado_logger;	// Pasa el resultado al main
-		(*cv_logger).notify_one();
-	}
+		(*b_main) = true;
+	}		
+	(*cv_logger).notify_one();
 	
 	printf("Termina el hilo logger\n");
 }
@@ -195,10 +197,17 @@ int main(int argc, char *argv[]) {
 			exit(-1);
 		}
 
-		// Reserva para el array de registro de hilos
-		registro_hilos = (struct Registro_hilo *) malloc(n_hilos*sizeof(struct Registro_hilo));
-		if(!registro_hilos) {
+		// Reserva para el array de resultados de hilos
+		resultado_hilos = (struct Resultado_hilo *) malloc(n_hilos*sizeof(struct Resultado_hilo));
+		if(!resultado_hilos) {
 			printf("Error al crear el array de hilos terminados\n");
+			exit(-1);
+		}
+		
+		// Reserva para el array de registro
+		reg = (int *) malloc(n_hilos*sizeof(int));
+		if(!reg) {
+			printf("Error al crear el array de registro\n");
 			exit(-1);
 		}
 				
@@ -207,10 +216,11 @@ int main(int argc, char *argv[]) {
 		// Variables necesarias
 		double logger_info;
 		imprimeElRegistro = 1;  // 0 si imprime el Main, 1 si imprime el Logger
-		std::mutex mutex_logger;
+		std::mutex mx_logger;
 		std::condition_variable cv_logger;
+		bool b_main = false;
 		// Crea el hilo logger
-		std::thread hilo_logger = std::thread(logger, &cv_logger, &mutex_logger, &logger_info, n_hilos);
+		std::thread hilo_logger = std::thread(logger, &cv_logger, &mx_logger, &logger_info, &b_main, n_hilos);
 #endif
 		// Comprueba si la carga se reparte correctamente o 
 		// el primer hilo tiene mas carga
@@ -245,16 +255,14 @@ int main(int argc, char *argv[]) {
 			// thread(array, inicio, fin, operacion, indice)
 			hilos[i] = std::thread(funcion_hilos, argumentos[i]);
 		}	// FIN FOR CREA HILOS
-#ifdef DEBUGGER
-			printf("Se han creado %d hilos\n", n_hilos);
-#endif
 
 #ifdef FEATURE_LOGGER
-		std::unique_lock<std::mutex> lock_logger(mutex_logger);
-		cv_logger.wait(lock_logger);	// Espera al logger
+		std::unique_lock<std::mutex> lk_logger_main(mx_logger);
+		printf("El main coge el mutex del logger\n");
+		cv_logger.wait(lk_logger_main, [b_main]{return b_main;});	// Espera al logger
 		// Aqui recibe el logger_info
 		hilo_logger.join();	// Join al logger
-		lock_logger.unlock();
+		lk_logger_main.unlock();
 #endif
 
 		for(int i = 0; i<n_hilos; i++) {
@@ -268,7 +276,7 @@ int main(int argc, char *argv[]) {
 		if(imprimeElRegistro == 0) {    // El main imprime el registro
 		    printf("MUESTRA LOS RESULTADOS\n");
 		    for(int i = 0; i < n_hilos; i++) {
-			    printf("Hilos: %d\nResultado: %f\n", i, registro_hilos[i].resultado);
+			    printf("Hilos: %d\nResultado: %f\n", reg[i], resultado_hilos[reg[i]].resultado);
 		    }
 		}
 #ifdef FEATURE_LOGGER
@@ -296,11 +304,12 @@ int main(int argc, char *argv[]) {
 void funcion_hilos(struct Argumentos_hilo argumentos) {
 	
 	double resultado = 0;
-    
+    	// Calcula el resultado parcial de la funcion
 	resultado = argumentos.funcion(argumentos.array, argumentos.inicio, argumentos.fin);
-	registro_hilos[argumentos.indice].id_hilo = std::this_thread::get_id();
-	registro_hilos[argumentos.indice].resultado = resultado;
-	printf("El hilo %d guarda el resultado %f\n", argumentos.indice, registro_hilos[argumentos.indice].resultado);
+	// Guarda los resultados
+	resultado_hilos[argumentos.indice].id_hilo = std::this_thread::get_id();
+	resultado_hilos[argumentos.indice].resultado = resultado;
+	printf("El hilo %d guarda el resultado %f\n", argumentos.indice, resultado_hilos[argumentos.indice].resultado);
     
 
 	// Guarda los resultados
@@ -308,17 +317,20 @@ void funcion_hilos(struct Argumentos_hilo argumentos) {
 	{
 		std::lock_guard<std::mutex> lock_fin(mx);
 		resultado_final += resultado;
-    }	
+    	}	
     
 #ifdef FEATURE_LOGGER
     
 	printf("Pasa resultados al logger\n");
     	/*DESPIERTA AL lOGGER*/
 	{
-		std::lock_guard<std::mutex> lk_despierta_logger(mutex_despierta_logger); // Coge el mutex
-		despierta_logger = true;
+		std::lock_guard<std::mutex> lk_despierta_logger(mx_despierta_logger); // Coge el mutex
+		printf("%d Llega a coger el mutex\n", argumentos.indice);
+		hilos_resueltos += 1;
+		printf("Hilos resueltos: %d\n", hilos_resueltos);
 	}
 	cv_despierta_logger.notify_one(); // Despierta al logger
+	printf("%d Llega a notificar al logger\n", argumentos.indice);
 #endif
     // Registra cuando acaba
     std::lock_guard<std::mutex> lk_reg(mx_reg);
